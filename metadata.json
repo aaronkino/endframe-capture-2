@@ -1,0 +1,5 @@
+{
+  "name": "EndFrame Capture",
+  "description": "Automatically extracts the last frames of any video as PNGs instantly in the browser.",
+  "requestFramePermissions": []
+}
