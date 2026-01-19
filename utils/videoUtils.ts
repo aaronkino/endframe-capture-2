@@ -1,8 +1,9 @@
 import { ExtractionResult } from '../types';
 
-// Robust check for video files, as some browsers/OS don't report MIME types correctly for MKV/TS/HEVC
+// Robust check for video files, including HEVC, H.264, H.265, AVI, MOV
 export const isValidVideoFile = (file: File): boolean => {
-  const validExtensions = /\.(mp4|mov|webm|avi|mkv|hevc|ts|m4v)$/i;
+  // Common video extensions and the specific ones requested
+  const validExtensions = /\.(mp4|mov|webm|avi|mkv|hevc|ts|m4v|h264|h265|264|265|3gp)$/i;
   return file.type.startsWith('video/') || validExtensions.test(file.name);
 };
 
@@ -95,7 +96,17 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
     };
 
     video.onloadedmetadata = () => {
-        processNextFrame();
+        // Some formats might read infinite duration initially, wait or clamp
+        if (video.duration === Infinity) {
+             video.currentTime = 1e101; // Hack to trigger duration change in some browsers
+             video.ontimeupdate = () => {
+                 video.ontimeupdate = null;
+                 video.currentTime = 0;
+                 processNextFrame();
+             }
+        } else {
+             processNextFrame();
+        }
     };
 
     video.onseeked = () => {
@@ -105,7 +116,7 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
 
     video.onerror = () => {
       cleanUp();
-      reject(new Error("Error loading video file. The format might not be supported by your browser."));
+      reject(new Error(`Error loading video file (${file.name}). The format might not be supported by your browser.`));
     };
   });
 };

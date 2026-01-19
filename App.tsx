@@ -246,7 +246,7 @@ const App: React.FC = () => {
       </div>
 
       <nav className="relative z-20 w-full p-4 flex justify-end">
-        {/* Language Dropdown */}
+        {/* Language Dropdown - TEXT ONLY */}
         <div className="relative lang-dropdown">
           <button 
             onClick={(e) => { e.stopPropagation(); setIsLangMenuOpen(!isLangMenuOpen); }}
