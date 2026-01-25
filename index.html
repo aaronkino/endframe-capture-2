@@ -10,17 +10,15 @@
     <style>
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
-        @keyframes slideInBottom { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
         .animate-in { animation-duration: 0.5s; animation-fill-mode: both; }
         .fade-in { animation-name: fadeIn; }
         .zoom-in { animation-name: zoomIn; }
-        .slide-in-from-bottom-4 { animation-name: slideInBottom; }
         
         ::-webkit-scrollbar { width: 8px; }
-        ::-webkit-scrollbar-track { background: #1e293b; }
-        ::-webkit-scrollbar-thumb { background: #475569; border-radius: 4px; }
-        ::-webkit-scrollbar-thumb:hover { background: #64748b; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #475569; }
     </style>
 
     <script type="importmap">
@@ -29,16 +27,389 @@
     "react": "https://esm.sh/react@19.0.0",
     "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
     "lucide-react": "https://esm.sh/lucide-react@0.469.0?deps=react@19.0.0",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
-    "react/": "https://esm.sh/react@^19.2.3/"
+    "react/": "https://esm.sh/react@^19.2.3/",
+    "@google/genai": "https://esm.sh/@google/genai@^1.37.0"
   }
 }
 </script>
 </head>
-<body class="bg-slate-900 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white">
+<body class="bg-slate-950 text-slate-100 antialiased selection:bg-indigo-500 selection:text-white overflow-y-scroll">
     <div id="root"></div>
 
-    <script type="text/babel" data-presets="react,typescript" data-type="module" src="./index.tsx"></script>
+    <script type="text/babel" data-presets="react,typescript" data-type="module">
+        import React, { useState, useRef, useEffect } from 'react';
+        import ReactDOM from 'react-dom/client';
+        import { Upload, Settings, Github, CheckCircle2, AlertCircle, Loader2, Download, CloudUpload, EyeOff } from 'lucide-react';
+
+        // --- Types ---
+        interface GitHubConfig {
+            token: string;
+            owner: string;
+            repo: string;
+            path: string;
+        }
+
+        interface ProcessedItem {
+            id: string;
+            fileName: string;
+            status: 'PROCESSING' | 'COMPLETED' | 'ERROR';
+            downloadStatus: 'PENDING' | 'DONE' | 'FAILED' | 'SKIPPED';
+            uploadStatus: 'PENDING' | 'UPLOADING' | 'DONE' | 'FAILED' | 'SKIPPED';
+            error?: string;
+        }
+
+        // --- Utils ---
+        const isValidVideoFile = (file: File): boolean => {
+            const validExtensions = /\.(mp4|mov|webm|avi|mkv|hevc|ts|m4v|h264|h265|264|265|3gp)$/i;
+            return file.type.startsWith('video/') || validExtensions.test(file.name);
+        };
+
+        const downloadBlob = (blob: Blob, filename: string) => {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        };
+
+        const uploadToGitHub = async (blob: Blob, fileName: string, config: GitHubConfig): Promise<void> => {
+            if (!config.token || !config.owner || !config.repo) {
+                throw new Error("Missing GitHub Configuration");
+            }
+
+            return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onloadend = async () => {
+                    const base64Content = (reader.result as string).split(',')[1];
+                    const path = config.path ? `${config.path.replace(/\/$/, '')}/${fileName}` : fileName;
+                    const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${path}`;
+                    
+                    try {
+                        // Optimistically try to create (PUT)
+                        const response = await fetch(url, {
+                            method: 'PUT',
+                            headers: {
+                                'Authorization': `Bearer ${config.token}`,
+                                'Content-Type': 'application/json',
+                                'Accept': 'application/vnd.github.v3+json'
+                            },
+                            body: JSON.stringify({
+                                message: `Add ${fileName} via EndFrame Capture`,
+                                content: base64Content,
+                            })
+                        });
+
+                        if (!response.ok) {
+                            // If 409, file exists. We could handle update, but let's error for now to be safe or maybe overwrite?
+                            // For this simple app, we treat 422/409 as errors or just overwrite if SHA provided (but we didn't fetch SHA).
+                            // Let's assume overwrite requires SHA, so this will fail if exists. 
+                            // To fix "file exists", we usually GET first.
+                            const errData = await response.json();
+                            
+                            if (response.status === 422 && errData.message.includes('sha')) {
+                                // Simple conflict resolution: Try uploading with a timestamp in name?
+                                // For now, just throw.
+                                throw new Error(`File already exists or invalid path: ${errData.message}`);
+                            }
+                            throw new Error(`GitHub Error: ${errData.message}`);
+                        }
+                        resolve();
+                    } catch (e: any) {
+                        reject(e);
+                    }
+                };
+                reader.onerror = () => reject(new Error("Failed to read file"));
+                reader.readAsDataURL(blob);
+            });
+        };
+
+        const extractLastFrame = (file: File): Promise<{ blob: Blob, fileName: string }> => {
+            return new Promise((resolve, reject) => {
+                const video = document.createElement('video');
+                const objectUrl = URL.createObjectURL(file);
+                
+                video.playsInline = true;
+                video.muted = true;
+                video.src = objectUrl;
+                video.preload = 'auto';
+
+                video.onloadedmetadata = () => {
+                    if (video.duration === Infinity) {
+                        video.currentTime = 1e101;
+                        video.ontimeupdate = () => {
+                            video.ontimeupdate = null;
+                            video.currentTime = 0;
+                            seekToEnd();
+                        };
+                    } else {
+                        seekToEnd();
+                    }
+                };
+
+                const seekToEnd = () => {
+                    // Seek to almost the end
+                    let seekTime = Math.max(0, video.duration - 0.05);
+                    video.currentTime = seekTime;
+                };
+
+                video.onseeked = async () => {
+                    try {
+                        const canvas = document.createElement('canvas');
+                        canvas.width = video.videoWidth;
+                        canvas.height = video.videoHeight;
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) throw new Error("Canvas context null");
+                        
+                        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+                        
+                        const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png', 1.0));
+                        if (!blob) throw new Error("Blob creation failed");
+
+                        const fileName = `${file.name.replace(/\.[^/.]+$/, "")}_end.png`;
+                        
+                        cleanUp();
+                        resolve({ blob, fileName });
+                    } catch (e) {
+                        cleanUp();
+                        reject(e);
+                    }
+                };
+
+                video.onerror = () => {
+                    cleanUp();
+                    reject(new Error("Video load failed"));
+                };
+
+                const cleanUp = () => {
+                    URL.revokeObjectURL(objectUrl);
+                    video.remove();
+                };
+            });
+        };
+
+        // --- Components ---
+
+        const App = () => {
+            const [ghConfig, setGhConfig] = useState<GitHubConfig>(() => {
+                const saved = localStorage.getItem('ghConfig');
+                return saved ? JSON.parse(saved) : { token: '', owner: '', repo: '', path: '' };
+            });
+            const [showSettings, setShowSettings] = useState(false);
+            const [items, setItems] = useState<ProcessedItem[]>([]);
+            const [autoDownload, setAutoDownload] = useState(true);
+
+            useEffect(() => {
+                localStorage.setItem('ghConfig', JSON.stringify(ghConfig));
+            }, [ghConfig]);
+
+            const handleFiles = async (files: FileList | null) => {
+                if (!files) return;
+                
+                const newItems: ProcessedItem[] = Array.from(files).filter(isValidVideoFile).map(f => ({
+                    id: Math.random().toString(36).substr(2, 9),
+                    fileName: f.name,
+                    status: 'PROCESSING',
+                    downloadStatus: 'PENDING',
+                    uploadStatus: 'PENDING'
+                }));
+
+                if (newItems.length === 0) return;
+
+                setItems(prev => [...newItems, ...prev]);
+
+                // Process each file
+                for (let i = 0; i < newItems.length; i++) {
+                    const item = newItems[i];
+                    const file = Array.from(files).find(f => f.name === item.fileName)!;
+
+                    try {
+                        // 1. Extract
+                        const { blob, fileName } = await extractLastFrame(file);
+
+                        // 2. Auto Download
+                        let dlStatus: ProcessedItem['downloadStatus'] = 'SKIPPED';
+                        if (autoDownload) {
+                            try {
+                                downloadBlob(blob, fileName);
+                                dlStatus = 'DONE';
+                            } catch (e) {
+                                dlStatus = 'FAILED';
+                            }
+                        }
+
+                        // Update State after download
+                        setItems(prev => prev.map(it => it.id === item.id ? { ...it, downloadStatus: dlStatus, uploadStatus: 'UPLOADING' } : it));
+
+                        // 3. Upload to GitHub
+                        let upStatus: ProcessedItem['uploadStatus'] = 'SKIPPED';
+                        if (ghConfig.token && ghConfig.repo) {
+                            try {
+                                await uploadToGitHub(blob, fileName, ghConfig);
+                                upStatus = 'DONE';
+                            } catch (e: any) {
+                                console.error(e);
+                                upStatus = 'FAILED';
+                            }
+                        }
+
+                        // 4. Complete
+                        setItems(prev => prev.map(it => it.id === item.id ? { 
+                            ...it, 
+                            status: 'COMPLETED', 
+                            downloadStatus: dlStatus,
+                            uploadStatus: upStatus 
+                        } : it));
+
+                    } catch (e: any) {
+                        setItems(prev => prev.map(it => it.id === item.id ? { 
+                            ...it, 
+                            status: 'ERROR', 
+                            error: e.message 
+                        } : it));
+                    }
+                }
+            };
+
+            return (
+                <div className="min-h-screen flex flex-col items-center py-12 px-4 relative">
+                    
+                    {/* Header */}
+                    <div className="text-center mb-12 space-y-2 z-10">
+                        <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-indigo-400 to-cyan-300">
+                            EndFrame Capture
+                        </h1>
+                        <p className="text-slate-500 text-sm font-medium">Auto-Extract • Auto-Upload • Stealth View</p>
+                    </div>
+
+                    {/* Settings Toggle */}
+                    <button 
+                        onClick={() => setShowSettings(!showSettings)}
+                        className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white transition-colors z-20"
+                    >
+                        <Settings className="w-6 h-6" />
+                    </button>
+
+                    {/* Settings Modal/Panel */}
+                    {showSettings && (
+                        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8 shadow-2xl animate-in fade-in zoom-in">
+                            <h2 className="text-lg font-bold text-white mb-4 flex items-center">
+                                <Github className="w-5 h-5 mr-2" /> GitHub Configuration
+                            </h2>
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Personal Access Token</label>
+                                    <input 
+                                        type="password" 
+                                        value={ghConfig.token}
+                                        onChange={e => setGhConfig({...ghConfig, token: e.target.value})}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
+                                        placeholder="ghp_..."
+                                    />
+                                </div>
+                                <div className="grid grid-cols-2 gap-4">
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Owner</label>
+                                        <input 
+                                            type="text" 
+                                            value={ghConfig.owner}
+                                            onChange={e => setGhConfig({...ghConfig, owner: e.target.value})}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
+                                            placeholder="username"
+                                        />
+                                    </div>
+                                    <div>
+                                        <label className="block text-xs text-slate-400 mb-1">Repo</label>
+                                        <input 
+                                            type="text" 
+                                            value={ghConfig.repo}
+                                            onChange={e => setGhConfig({...ghConfig, repo: e.target.value})}
+                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
+                                            placeholder="repository"
+                                        />
+                                    </div>
+                                </div>
+                                <div>
+                                    <label className="block text-xs text-slate-400 mb-1">Folder Path (Optional)</label>
+                                    <input 
+                                        type="text" 
+                                        value={ghConfig.path}
+                                        onChange={e => setGhConfig({...ghConfig, path: e.target.value})}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
+                                        placeholder="screenshots/video1"
+                                    />
+                                </div>
+                            </div>
+                            <div className="mt-4 pt-4 border-t border-slate-800">
+                                <label className="flex items-center space-x-2 cursor-pointer">
+                                    <input 
+                                        type="checkbox" 
+                                        checked={autoDownload}
+                                        onChange={e => setAutoDownload(e.target.checked)}
+                                        className="rounded bg-slate-950 border-slate-800 text-indigo-500 focus:ring-0" 
+                                    />
+                                    <span className="text-sm text-slate-300">Auto-save to disk</span>
+                                </label>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Upload Area */}
+                    <label className="w-full max-w-xl aspect-[3/1] bg-slate-900/50 hover:bg-slate-900 border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all group mb-8">
+                        <Upload className="w-8 h-8 text-slate-600 group-hover:text-indigo-400 transition-colors mb-2" />
+                        <span className="text-slate-500 group-hover:text-slate-300 font-medium">Drop videos here</span>
+                        <span className="text-xs text-slate-600 mt-1">MP4, MOV, HEVC, AVI, H264...</span>
+                        <input type="file" multiple accept="video/*" className="hidden" onChange={e => handleFiles(e.target.files)} />
+                    </label>
+
+                    {/* Status List (Stealth Mode: No Images) */}
+                    <div className="w-full max-w-xl space-y-3">
+                        {items.map(item => (
+                            <div key={item.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-4">
+                                <div className="flex items-center min-w-0 flex-1 mr-4">
+                                    <div className="w-10 h-10 rounded-full bg-slate-950 flex items-center justify-center border border-slate-800 mr-3 flex-shrink-0">
+                                        {item.status === 'PROCESSING' && <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />}
+                                        {item.status === 'COMPLETED' && <CheckCircle2 className="w-5 h-5 text-emerald-500" />}
+                                        {item.status === 'ERROR' && <AlertCircle className="w-5 h-5 text-red-500" />}
+                                    </div>
+                                    <div className="min-w-0">
+                                        <h3 className="text-sm font-medium text-slate-200 truncate">{item.fileName}</h3>
+                                        <div className="flex items-center space-x-3 mt-1">
+                                            {item.error ? (
+                                                <span className="text-xs text-red-400">{item.error}</span>
+                                            ) : (
+                                                <>
+                                                    <span className={`text-[10px] uppercase tracking-wider font-bold flex items-center ${item.downloadStatus === 'DONE' ? 'text-emerald-500/80' : 'text-slate-600'}`}>
+                                                        <Download className="w-3 h-3 mr-1" />
+                                                        {item.downloadStatus}
+                                                    </span>
+                                                    <span className={`text-[10px] uppercase tracking-wider font-bold flex items-center ${item.uploadStatus === 'DONE' ? 'text-indigo-400/80' : item.uploadStatus === 'UPLOADING' ? 'text-indigo-400 animate-pulse' : 'text-slate-600'}`}>
+                                                        <CloudUpload className="w-3 h-3 mr-1" />
+                                                        {item.uploadStatus}
+                                                    </span>
+                                                    {item.status === 'COMPLETED' && (
+                                                        <span className="text-[10px] uppercase tracking-wider font-bold text-slate-600 flex items-center ml-2" title="Preview Hidden">
+                                                            <EyeOff className="w-3 h-3 mr-1" /> Hidden
+                                                        </span>
+                                                    )}
+                                                </>
+                                            )}
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+        root.render(<App />);
+    </script>
 </body>
 </html>
