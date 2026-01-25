@@ -9,9 +9,8 @@ export const isValidVideoFile = (file: File): boolean => {
 
 /**
  * Extracts N frames from the end of the video.
- * count = 1: Duration
- * count = 2: Duration, Duration - 0.1s
- * count = 3: Duration, Duration - 0.1s, Duration - 0.2s
+ * count = 1: Duration - epsilon
+ * count = 2: Duration - epsilon, Duration - 0.1s
  */
 export const extractFrames = (file: File, count: number = 1): Promise<ExtractionResult[]> => {
   return new Promise((resolve, reject) => {
@@ -71,18 +70,20 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
             return;
         }
 
-        // Calculate timestamp
-        // 0 -> duration
-        // 1 -> duration - 0.1
-        // 2 -> duration - 0.2
-        let seekTime = video.duration - (currentFrameIndex * 0.1); // 0.1s interval roughly 3-6 frames depending on fps
+        // To capture the absolute last frame, we want to be as close to the duration as possible
+        // without hitting the exact duration which might trigger 'ended' state or black screens in some browsers.
+        // Previous 0.05s was too large (could miss last frame at 60fps).
+        // 0.001s (1ms) is safe to stay within the last frame boundary.
+        const END_EPSILON = 0.001;
+        const FRAME_STRIDE = 0.1; // 100ms interval for multiple frames
+
+        // Calculate target time
+        // Index 0: duration - 0.001
+        // Index 1: duration - 0.101
+        let seekTime = video.duration - END_EPSILON - (currentFrameIndex * FRAME_STRIDE);
         
-        // Safety check
-        if (seekTime > 0.1) {
-            seekTime = seekTime - 0.05; // seek just before end to capture
-        } else {
-            seekTime = 0; // fallback to start if video is too short
-        }
+        // Clamp to 0 to prevent negative seek times
+        seekTime = Math.max(0, seekTime);
         
         video.currentTime = seekTime;
     };

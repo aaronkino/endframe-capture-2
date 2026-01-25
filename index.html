@@ -48,7 +48,9 @@
             CheckCircle2, Circle, Loader2, ArrowLeft 
         } from 'lucide-react';
 
-        // --- TYPES ---
+        // ----------------------------------------------------------------------
+        // TYPES & ENUMS (Simulated for JS/Babel)
+        // ----------------------------------------------------------------------
         
         const ProcessingStatus = {
             IDLE: 'IDLE',
@@ -58,7 +60,10 @@
             ERROR: 'ERROR'
         };
 
-        // --- TRANSLATIONS ---
+        // ----------------------------------------------------------------------
+        // TRANSLATIONS
+        // ----------------------------------------------------------------------
+        
         const translations = {
             en: {
                 title: "EndFrame Capture",
@@ -452,7 +457,9 @@
             }
         };
 
-        // --- UTILS ---
+        // ----------------------------------------------------------------------
+        // UTILS
+        // ----------------------------------------------------------------------
         
         const isValidVideoFile = (file) => {
             const validExtensions = /\.(mp4|mov|webm|avi|mkv|hevc|ts|m4v|h264|h265|264|265|3gp)$/i;
@@ -527,17 +534,17 @@
                         return;
                     }
 
-                    // Calculate timestamp
-                    // 0 -> duration
-                    // 1 -> duration - 0.1
-                    // 2 -> duration - 0.2
-                    let seekTime = video.duration - (currentFrameIndex * 0.1); 
+                    // To capture the absolute last frame, we want to be as close to the duration as possible
+                    // without hitting the exact duration which might trigger 'ended' state.
+                    // 0.001s (1ms) is safe to stay within the last frame boundary.
+                    const END_EPSILON = 0.001; 
+                    const FRAME_STRIDE = 0.1; // 100ms interval for multiple frames
+
+                    // Calculate target time
+                    let seekTime = video.duration - END_EPSILON - (currentFrameIndex * FRAME_STRIDE);
                     
-                    if (seekTime > 0.1) {
-                        seekTime = seekTime - 0.05; 
-                    } else {
-                        seekTime = 0; 
-                    }
+                    // Clamp to 0
+                    seekTime = Math.max(0, seekTime);
                     
                     video.currentTime = seekTime;
                 };
@@ -574,7 +581,9 @@
             });
         };
 
-        // --- COMPONENTS ---
+        // ----------------------------------------------------------------------
+        // COMPONENTS
+        // ----------------------------------------------------------------------
 
         const Button = ({ 
             children, 
@@ -769,6 +778,10 @@
             );
         };
 
+        // ----------------------------------------------------------------------
+        // MAIN APP
+        // ----------------------------------------------------------------------
+
         const languages = [
             { code: 'en', label: 'English' },
             { code: 'ar', label: 'العربية' },
@@ -784,8 +797,6 @@
             { code: 'ja', label: '日本語' },
             { code: 'ko', label: '한국어' },
         ];
-
-        // --- APP ---
 
         const App = () => {
             // Settings
