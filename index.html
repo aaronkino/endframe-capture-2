@@ -10,10 +10,12 @@
     <style>
         @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
         @keyframes zoomIn { from { opacity: 0; transform: scale(0.95); } to { opacity: 1; transform: scale(1); } }
+        @keyframes slideInBottom { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
         
         .animate-in { animation-duration: 0.5s; animation-fill-mode: both; }
         .fade-in { animation-name: fadeIn; }
         .zoom-in { animation-name: zoomIn; }
+        .slide-in-from-bottom-4 { animation-name: slideInBottom; }
         
         ::-webkit-scrollbar { width: 8px; }
         ::-webkit-scrollbar-track { background: #0f172a; }
@@ -24,12 +26,12 @@
     <script type="importmap">
 {
   "imports": {
-    "react": "https://esm.sh/react@19.0.0",
-    "react-dom/client": "https://esm.sh/react-dom@19.0.0/client",
-    "lucide-react": "https://esm.sh/lucide-react@0.469.0?deps=react@19.0.0",
+    "react": "https://esm.sh/react@18.2.0",
+    "react-dom/client": "https://esm.sh/react-dom@18.2.0/client",
+    "lucide-react": "https://esm.sh/lucide-react@0.469.0?deps=react@18.2.0",
     "react-dom/": "https://esm.sh/react-dom@^19.2.3/",
     "react/": "https://esm.sh/react@^19.2.3/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.37.0"
+    "@google/genai": "https://esm.sh/@google/genai@^1.38.0"
   }
 }
 </script>
@@ -40,32 +42,425 @@
     <script type="text/babel" data-presets="react,typescript" data-type="module">
         import React, { useState, useRef, useEffect } from 'react';
         import ReactDOM from 'react-dom/client';
-        import { Upload, Settings, Github, CheckCircle2, AlertCircle, Loader2, Download, CloudUpload, EyeOff } from 'lucide-react';
+        import { 
+            Upload, Video, AlertCircle, Layers, ChevronDown, Check, 
+            ToggleLeft, ToggleRight, Download, RefreshCw, FileImage, 
+            CheckCircle2, Circle, Loader2, ArrowLeft 
+        } from 'lucide-react';
 
-        // --- Types ---
-        interface GitHubConfig {
-            token: string;
-            owner: string;
-            repo: string;
-            path: string;
-        }
+        // --- TYPES ---
+        
+        // Emulating enum behavior for plain JS/Babel environment
+        const ProcessingStatus = {
+            IDLE: 'IDLE',
+            LOADING_VIDEO: 'LOADING_VIDEO',
+            EXTRACTING: 'EXTRACTING',
+            COMPLETED: 'COMPLETED',
+            ERROR: 'ERROR'
+        };
 
-        interface ProcessedItem {
-            id: string;
-            fileName: string;
-            status: 'PROCESSING' | 'COMPLETED' | 'ERROR';
-            downloadStatus: 'PENDING' | 'DONE' | 'FAILED' | 'SKIPPED';
-            uploadStatus: 'PENDING' | 'UPLOADING' | 'DONE' | 'FAILED' | 'SKIPPED';
-            error?: string;
-        }
+        // --- TRANSLATIONS ---
+        const translations = {
+            en: {
+                title: "EndFrame Capture",
+                subtitle: "Instantly extract the final frame(s) of any video as high-quality PNGs.",
+                autoDownloadOn: "Auto-Download On",
+                autoDownloadOff: "Auto-Download Off",
+                clickUpload: "Click to upload or drag videos here",
+                supportFormat: "Supports single or batch upload (MP4, MOV, WEBM, AVI)",
+                batchTag: "Batch Mode Supported",
+                processing: "Processing Video...",
+                seeking: "Seeking frames...",
+                failed: "Processing Failed",
+                tryAgain: "Try Again",
+                localOnly: "Local processing only. Your videos never leave your browser.",
+                new: "New",
+                download: "Download PNG",
+                batchTitle: "Batch Extraction",
+                batchProcessing: "Processing videos...",
+                batchCompleted: "Batch completed",
+                processed: "Processed",
+                processMore: "Process More Files",
+                downloaded: "Downloaded",
+                downloadNow: "Download",
+                errorVideo: "Please upload valid video files.",
+                extractTime: "Extracted at timestamp",
+                pending: "Pending",
+                frameCountLabel: "Extract Last:",
+                frame1x: "1 Frame",
+                frame2x: "2 Frames",
+                frame3x: "3 Frames"
+            },
+            ar: {
+                title: "EndFrame Capture",
+                subtitle: "استخرج الإطارات الأخيرة لأي فيديو فوراً كصور PNG عالية الجودة.",
+                autoDownloadOn: "تنزيل تلقائي: تشغيل",
+                autoDownloadOff: "تنزيل تلقائي: إيقاف",
+                clickUpload: "انقر للتحميل أو اسحب مقاطع الفيديو هنا",
+                supportFormat: "يدعم التحميل الفردي أو المجمع (MP4, MOV, WEBM, AVI)",
+                batchTag: "يدعم الوضع المجمع",
+                processing: "جاري معالجة الفيديو...",
+                seeking: "جاري البحث عن الإطارات...",
+                failed: "فشلت المعالجة",
+                tryAgain: "حاول مرة أخرى",
+                localOnly: "معالجة محلية فقط. فيديوهاتك لا تغادر متصفحك أبداً.",
+                new: "جديد",
+                download: "تنزيل PNG",
+                batchTitle: "استخراج مجمع",
+                batchProcessing: "جاري معالجة الفيديوهات...",
+                batchCompleted: "اكتملت الدفعة",
+                processed: "تمت المعالجة",
+                processMore: "معالجة المزيد من الملفات",
+                downloaded: "تم التنزيل",
+                downloadNow: "تنزيل",
+                errorVideo: "يرجى تحميل ملفات فيديو صالحة.",
+                extractTime: "تم الاستخراج في الطابع الزمني",
+                pending: "قيد الانتظار",
+                frameCountLabel: "استخراج آخر:",
+                frame1x: "إطار واحد",
+                frame2x: "إطارين",
+                frame3x: "3 إطارات"
+            },
+            es: {
+                title: "EndFrame Capture",
+                subtitle: "Extrae instantáneamente los últimos fotogramas de cualquier video como PNG de alta calidad.",
+                autoDownloadOn: "Descarga Auto: ON",
+                autoDownloadOff: "Descarga Auto: OFF",
+                clickUpload: "Haz clic para subir o arrastra videos aquí",
+                supportFormat: "Soporta carga individual o por lotes (MP4, MOV, WEBM, AVI)",
+                batchTag: "Modo por lotes",
+                processing: "Procesando video...",
+                seeking: "Buscando fotogramas...",
+                failed: "Procesamiento fallido",
+                tryAgain: "Intentar de nuevo",
+                localOnly: "Procesamiento local. Tus videos nunca salen de tu navegador.",
+                new: "Nuevo",
+                download: "Descargar PNG",
+                batchTitle: "Extracción por lotes",
+                batchProcessing: "Procesando videos...",
+                batchCompleted: "Lote completado",
+                processed: "Procesado",
+                processMore: "Procesar más archivos",
+                downloaded: "Descargado",
+                downloadNow: "Descargar",
+                errorVideo: "Por favor, sube archivos de video válidos.",
+                extractTime: "Extraído en la marca de tiempo",
+                pending: "Pendiente",
+                frameCountLabel: "Extraer últimos:",
+                frame1x: "1 Fotograma",
+                frame2x: "2 Fotogramas",
+                frame3x: "3 Fotogramas"
+            },
+            fr: {
+                title: "EndFrame Capture",
+                subtitle: "Extrayez instantanément les dernières images de n'importe quelle vidéo en PNG haute qualité.",
+                autoDownloadOn: "Téléchargement auto activé",
+                autoDownloadOff: "Téléchargement auto désactivé",
+                clickUpload: "Cliquez pour télécharger ou glissez les vidéos ici",
+                supportFormat: "Supporte le chargement unique ou par lot (MP4, MOV, WEBM, AVI)",
+                batchTag: "Mode lot supporté",
+                processing: "Traitement de la vidéo...",
+                seeking: "Recherche des images...",
+                failed: "Échec du traitement",
+                tryAgain: "Réessayer",
+                localOnly: "Traitement local uniquement. Vos vidéos ne quittent jamais votre navigateur.",
+                new: "Nouveau",
+                download: "Télécharger PNG",
+                batchTitle: "Extraction par lot",
+                batchProcessing: "Traitement des vidéos...",
+                batchCompleted: "Lot terminé",
+                processed: "Traité",
+                processMore: "Traiter plus de fichiers",
+                downloaded: "Téléchargé",
+                downloadNow: "Télécharger",
+                errorVideo: "Veuillez télécharger des fichiers vidéo valides.",
+                extractTime: "Extrait au timestamp",
+                pending: "En attente",
+                frameCountLabel: "Extraire derniers:",
+                frame1x: "1 Image",
+                frame2x: "2 Images",
+                frame3x: "3 Images"
+            },
+            de: {
+                title: "EndFrame Capture",
+                subtitle: "Extrahieren Sie sofort die letzten Bilder jedes Videos als hochwertige PNGs.",
+                autoDownloadOn: "Auto-Download Ein",
+                autoDownloadOff: "Auto-Download Aus",
+                clickUpload: "Klicken zum Hochladen oder Videos hierher ziehen",
+                supportFormat: "Unterstützt Einzel- oder Stapel-Upload (MP4, MOV, WEBM, AVI)",
+                batchTag: "Stapelverarbeitung",
+                processing: "Video wird verarbeitet...",
+                seeking: "Suche Bilder...",
+                failed: "Verarbeitung fehlgeschlagen",
+                tryAgain: "Erneut versuchen",
+                localOnly: "Nur lokale Verarbeitung. Ihre Videos verlassen niemals Ihren Browser.",
+                new: "Neu",
+                download: "PNG herunterladen",
+                batchTitle: "Stapelextraktion",
+                batchProcessing: "Verarbeite Videos...",
+                batchCompleted: "Stapel abgeschlossen",
+                processed: "Verarbeitet",
+                processMore: "Weitere Dateien verarbeiten",
+                downloaded: "Heruntergeladen",
+                downloadNow: "Herunterladen",
+                errorVideo: "Bitte gültige Videodateien hochladen.",
+                extractTime: "Extrahiert bei Zeitstempel",
+                pending: "Ausstehend",
+                frameCountLabel: "Letzte extrahieren:",
+                frame1x: "1 Bild",
+                frame2x: "2 Bilder",
+                frame3x: "3 Bilder"
+            },
+            hi: {
+                title: "EndFrame Capture",
+                subtitle: "किसी भी वीडियो के अंतिम फ्रेम को उच्च-गुणवत्ता वाले PNG के रूप में तुरंत निकालें।",
+                autoDownloadOn: "ऑटो-डाउनलोड चालू",
+                autoDownloadOff: "ऑटो-डाउनलोड बंद",
+                clickUpload: "अपलोड करने के लिए क्लिक करें या वीडियो को यहाँ खींचें",
+                supportFormat: "एकल या बैच अपलोड का समर्थन करता है (MP4, MOV, WEBM, AVI)",
+                batchTag: "बैच मोड समर्थित",
+                processing: "वीडियो संसाधित हो रहा है...",
+                seeking: "फ्रेम खोज रहा है...",
+                failed: "प्रसंस्करण विफल",
+                tryAgain: "पुनः प्रयास करें",
+                localOnly: "केवल स्थानीय प्रसंस्करण। आपके वीडियो आपके ब्राउज़र को कभी नहीं छोड़ते।",
+                new: "नया",
+                download: "PNG डाउनलोड करें",
+                batchTitle: "बैच निष्कर्षण",
+                batchProcessing: "वीडियो संसाधित हो रहे हैं...",
+                batchCompleted: "बैच पूर्ण",
+                processed: "संसाधित",
+                processMore: "और फ़ाइलें संसाधित करें",
+                downloaded: "डाउनलोड किया गया",
+                downloadNow: "डाउनलोड",
+                errorVideo: "कृपया मान्य वीडियो फ़ाइलें अपलोड करें।",
+                extractTime: "टाइमस्टैम्प पर निकाला गया",
+                pending: "लंबित",
+                frameCountLabel: "अंतिम निकालें:",
+                frame1x: "1 फ्रेम",
+                frame2x: "2 फ्रेम",
+                frame3x: "3 फ्रेम"
+            },
+            it: {
+                title: "EndFrame Capture",
+                subtitle: "Estrai istantaneamente gli ultimi fotogrammi di qualsiasi video come PNG di alta qualità.",
+                autoDownloadOn: "Download Auto: ON",
+                autoDownloadOff: "Download Auto: OFF",
+                clickUpload: "Clicca per caricare o trascina i video qui",
+                supportFormat: "Supporta caricamento singolo o in batch (MP4, MOV, WEBM, AVI)",
+                batchTag: "Modalità Batch",
+                processing: "Elaborazione video...",
+                seeking: "Ricerca fotogrammi...",
+                failed: "Elaborazione fallita",
+                tryAgain: "Riprova",
+                localOnly: "Elaborazione locale. I tuoi video non lasciano mai il browser.",
+                new: "Nuovo",
+                download: "Scarica PNG",
+                batchTitle: "Estrazione Batch",
+                batchProcessing: "Elaborazione video...",
+                batchCompleted: "Batch completato",
+                processed: "Elaborato",
+                processMore: "Elabora altri file",
+                downloaded: "Scaricato",
+                downloadNow: "Scarica",
+                errorVideo: "Carica file video validi.",
+                extractTime: "Estratto al timestamp",
+                pending: "In attesa",
+                frameCountLabel: "Estrai ultimi:",
+                frame1x: "1 Fotogramma",
+                frame2x: "2 Fotogrammi",
+                frame3x: "3 Fotogrammi"
+            },
+            pl: {
+                title: "EndFrame Capture",
+                subtitle: "Błyskawicznie wyodrębnij ostatnie klatki dowolnego wideo jako wysokiej jakości pliki PNG.",
+                autoDownloadOn: "Auto-pobieranie WŁ",
+                autoDownloadOff: "Auto-pobieranie WYŁ",
+                clickUpload: "Kliknij, aby przesłać lub przeciągnij filmy tutaj",
+                supportFormat: "Obsługuje przesyłanie pojedyncze lub wsadowe (MP4, MOV, WEBM, AVI)",
+                batchTag: "Tryb wsadowy",
+                processing: "Przetwarzanie wideo...",
+                seeking: "Szukanie klatek...",
+                failed: "Przetwarzanie nieudane",
+                tryAgain: "Spróbuj ponownie",
+                localOnly: "Tylko przetwarzanie lokalne. Twoje filmy nigdy nie opuszczają przeglądarki.",
+                new: "Nowy",
+                download: "Pobierz PNG",
+                batchTitle: "Ekstrakcja wsadowa",
+                batchProcessing: "Przetwarzanie filmów...",
+                batchCompleted: "Zakończono",
+                processed: "Przetworzono",
+                processMore: "Przetwórz więcej plików",
+                downloaded: "Pobrane",
+                downloadNow: "Pobierz",
+                errorVideo: "Prześlij prawidłowe pliki wideo.",
+                extractTime: "Wyodrębniono w czasie",
+                pending: "Oczekujący",
+                frameCountLabel: "Wyodrębnij ostatnie:",
+                frame1x: "1 Klatka",
+                frame2x: "2 Klatki",
+                frame3x: "3 Klatki"
+            },
+            pt: {
+                title: "EndFrame Capture",
+                subtitle: "Extraia instantaneamente os últimos quadros de qualquer vídeo como PNGs de alta qualidade.",
+                autoDownloadOn: "Download Auto: ON",
+                autoDownloadOff: "Download Auto: OFF",
+                clickUpload: "Clique para enviar ou arraste vídeos aqui",
+                supportFormat: "Suporta upload único ou em lote (MP4, MOV, WEBM, AVI)",
+                batchTag: "Modo Batch",
+                processing: "Processando vídeo...",
+                seeking: "Buscando quadros...",
+                failed: "Falha no processamento",
+                tryAgain: "Tentar novamente",
+                localOnly: "Processamento local. Seus vídeos nunca saem do navegador.",
+                new: "Novo",
+                download: "Baixar PNG",
+                batchTitle: "Extração em Lote",
+                batchProcessing: "Processando vídeos...",
+                batchCompleted: "Lote concluído",
+                processed: "Processado",
+                processMore: "Processar mais arquivos",
+                downloaded: "Baixado",
+                downloadNow: "Baixar",
+                errorVideo: "Por favor, envie arquivos de vídeo válidos.",
+                extractTime: "Extraído no timestamp",
+                pending: "Pendente",
+                frameCountLabel: "Extrair últimos:",
+                frame1x: "1 Quadro",
+                frame2x: "2 Quadros",
+                frame3x: "3 Quadros"
+            },
+            "zh-CN": {
+                title: "末格截图",
+                subtitle: "即时提取视频的最后画面，并自动下载为高画质 PNG。",
+                autoDownloadOn: "自动下载已启用",
+                autoDownloadOff: "自动下载已关闭",
+                clickUpload: "点击上传或将视频拖曳至此",
+                supportFormat: "支持单档或批量上传 (MP4, MOV, WEBM, AVI)",
+                batchTag: "支持批量模式",
+                processing: "视频处理中...",
+                seeking: "正在获取画面...",
+                failed: "处理失败",
+                tryAgain: "再试一次",
+                localOnly: "仅在本地处理，您的视频不会上传至服务器。",
+                new: "重新上传",
+                download: "下载 PNG",
+                batchTitle: "批量提取作业",
+                batchProcessing: "正在处理视频...",
+                batchCompleted: "批量处理完成",
+                processed: "已处理",
+                processMore: "处理更多文件",
+                downloaded: "已下载",
+                downloadNow: "下载",
+                errorVideo: "请上传有效的视频文件。",
+                extractTime: "提取时间点",
+                pending: "等待中",
+                frameCountLabel: "提取张数：",
+                frame1x: "最后 1 格",
+                frame2x: "最后 2 格",
+                frame3x: "最后 3 格"
+            },
+            "zh-TW": {
+                title: "末格截圖",
+                subtitle: "即時擷取影片的最後畫面，並自動下載為高畫質 PNG。",
+                autoDownloadOn: "自動下載已開啟",
+                autoDownloadOff: "自動下載已關閉",
+                clickUpload: "點擊上傳或將影片拖曳至此",
+                supportFormat: "支援單檔或批量上傳 (MP4, MOV, WEBM, AVI)",
+                batchTag: "支援批量模式",
+                processing: "影片處理中...",
+                seeking: "正在擷取畫面...",
+                failed: "處理失敗",
+                tryAgain: "再試一次",
+                localOnly: "僅在本機處理，您的影片不會上傳至伺服器。",
+                new: "重新上傳",
+                download: "下載 PNG",
+                batchTitle: "批量擷取作業",
+                batchProcessing: "正在處理影片...",
+                batchCompleted: "批量處理完成",
+                processed: "已處理",
+                processMore: "處理更多檔案",
+                downloaded: "已下載",
+                downloadNow: "下載",
+                errorVideo: "請上傳有效的影片檔案。",
+                extractTime: "擷取時間點",
+                pending: "等待中",
+                frameCountLabel: "擷取張數：",
+                frame1x: "最後 1 格",
+                frame2x: "最後 2 格",
+                frame3x: "最後 3 格"
+            },
+            ja: {
+                title: "EndFrame Capture",
+                subtitle: "動画の最後のフレームを高品質なPNGとして瞬時に抽出します。",
+                autoDownloadOn: "自動ダウンロード ON",
+                autoDownloadOff: "自動ダウンロード OFF",
+                clickUpload: "クリックしてアップロード、または動画をここにドラッグ",
+                supportFormat: "単一または一括アップロードに対応 (MP4, MOV, WEBM, AVI)",
+                batchTag: "バッチモード対応",
+                processing: "動画を処理中...",
+                seeking: "フレームを検索中...",
+                failed: "処理に失敗しました",
+                tryAgain: "再試行",
+                localOnly: "ローカル処理のみ。動画がブラウザ外に送信されることはありません。",
+                new: "新規",
+                download: "PNGをダウンロード",
+                batchTitle: "一括抽出",
+                batchProcessing: "動画を処理中...",
+                batchCompleted: "一括処理完了",
+                processed: "処理済み",
+                processMore: "他のファイルを処理",
+                downloaded: "ダウンロード済み",
+                downloadNow: "ダウンロード",
+                errorVideo: "有効な動画ファイルをアップロードしてください。",
+                extractTime: "抽出時間",
+                pending: "待機中",
+                frameCountLabel: "最後の抽出数:",
+                frame1x: "1 フレーム",
+                frame2x: "2 フレーム",
+                frame3x: "3 フレーム"
+            },
+            ko: {
+                title: "EndFrame Capture",
+                subtitle: "모든 동영상의 마지막 프레임을 고화질 PNG로 즉시 추출합니다.",
+                autoDownloadOn: "자동 다운로드 켜짐",
+                autoDownloadOff: "자동 다운로드 꺼짐",
+                clickUpload: "클릭하여 업로드하거나 동영상을 여기로 드래그하세요",
+                supportFormat: "단일 또는 일괄 업로드 지원 (MP4, MOV, WEBM, AVI)",
+                batchTag: "일괄 모드 지원",
+                processing: "동영상 처리 중...",
+                seeking: "프레임 탐색 중...",
+                failed: "처리 실패",
+                tryAgain: "다시 시도",
+                localOnly: "로컬 처리 전용. 동영상은 브라우저를 벗어나지 않습니다.",
+                new: "새로 만들기",
+                download: "PNG 다운로드",
+                batchTitle: "일괄 추출 작업",
+                batchProcessing: "동영상 처리 중...",
+                batchCompleted: "일괄 처리 완료",
+                processed: "처리됨",
+                processMore: "더 많은 파일 처리",
+                downloaded: "다운로드됨",
+                downloadNow: "다운로드",
+                errorVideo: "유효한 동영상 파일을 업로드해주세요.",
+                extractTime: "추출 시간",
+                pending: "대기 중",
+                frameCountLabel: "마지막 추출:",
+                frame1x: "1 프레임",
+                frame2x: "2 프레임",
+                frame3x: "3 프레임"
+            }
+        };
 
-        // --- Utils ---
-        const isValidVideoFile = (file: File): boolean => {
+        // --- UTILS ---
+        
+        const isValidVideoFile = (file) => {
             const validExtensions = /\.(mp4|mov|webm|avi|mkv|hevc|ts|m4v|h264|h265|264|265|3gp)$/i;
             return file.type.startsWith('video/') || validExtensions.test(file.name);
         };
 
-        const downloadBlob = (blob: Blob, filename: string) => {
+        const downloadBlob = (blob, filename) => {
             const url = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
@@ -76,339 +471,709 @@
             URL.revokeObjectURL(url);
         };
 
-        const uploadToGitHub = async (blob: Blob, fileName: string, config: GitHubConfig): Promise<void> => {
-            if (!config.token || !config.owner || !config.repo) {
-                throw new Error("Missing GitHub Configuration");
-            }
-
-            return new Promise((resolve, reject) => {
-                const reader = new FileReader();
-                reader.onloadend = async () => {
-                    const base64Content = (reader.result as string).split(',')[1];
-                    const path = config.path ? `${config.path.replace(/\/$/, '')}/${fileName}` : fileName;
-                    const url = `https://api.github.com/repos/${config.owner}/${config.repo}/contents/${path}`;
-                    
-                    try {
-                        // Optimistically try to create (PUT)
-                        const response = await fetch(url, {
-                            method: 'PUT',
-                            headers: {
-                                'Authorization': `Bearer ${config.token}`,
-                                'Content-Type': 'application/json',
-                                'Accept': 'application/vnd.github.v3+json'
-                            },
-                            body: JSON.stringify({
-                                message: `Add ${fileName} via EndFrame Capture`,
-                                content: base64Content,
-                            })
-                        });
-
-                        if (!response.ok) {
-                            // If 409, file exists. We could handle update, but let's error for now to be safe or maybe overwrite?
-                            // For this simple app, we treat 422/409 as errors or just overwrite if SHA provided (but we didn't fetch SHA).
-                            // Let's assume overwrite requires SHA, so this will fail if exists. 
-                            // To fix "file exists", we usually GET first.
-                            const errData = await response.json();
-                            
-                            if (response.status === 422 && errData.message.includes('sha')) {
-                                // Simple conflict resolution: Try uploading with a timestamp in name?
-                                // For now, just throw.
-                                throw new Error(`File already exists or invalid path: ${errData.message}`);
-                            }
-                            throw new Error(`GitHub Error: ${errData.message}`);
-                        }
-                        resolve();
-                    } catch (e: any) {
-                        reject(e);
-                    }
-                };
-                reader.onerror = () => reject(new Error("Failed to read file"));
-                reader.readAsDataURL(blob);
-            });
-        };
-
-        const extractLastFrame = (file: File): Promise<{ blob: Blob, fileName: string }> => {
+        const extractFrames = (file, count = 1) => {
             return new Promise((resolve, reject) => {
                 const video = document.createElement('video');
                 const objectUrl = URL.createObjectURL(file);
+                const results = [];
                 
                 video.playsInline = true;
                 video.muted = true;
                 video.src = objectUrl;
-                video.preload = 'auto';
+                video.preload = 'auto'; 
 
-                video.onloadedmetadata = () => {
-                    if (video.duration === Infinity) {
-                        video.currentTime = 1e101;
-                        video.ontimeupdate = () => {
-                            video.ontimeupdate = null;
-                            video.currentTime = 0;
-                            seekToEnd();
-                        };
-                    } else {
-                        seekToEnd();
-                    }
-                };
-
-                const seekToEnd = () => {
-                    // Seek to almost the end
-                    let seekTime = Math.max(0, video.duration - 0.05);
-                    video.currentTime = seekTime;
-                };
-
-                video.onseeked = async () => {
+                let currentFrameIndex = 0;
+                
+                const captureFrame = async (timestamp) => {
                     try {
                         const canvas = document.createElement('canvas');
                         canvas.width = video.videoWidth;
                         canvas.height = video.videoHeight;
-                        const ctx = canvas.getContext('2d');
-                        if (!ctx) throw new Error("Canvas context null");
                         
+                        const ctx = canvas.getContext('2d');
+                        if (!ctx) throw new Error("Could not get canvas context");
+
                         ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
                         
-                        const blob = await new Promise<Blob | null>(r => canvas.toBlob(r, 'image/png', 1.0));
-                        if (!blob) throw new Error("Blob creation failed");
+                        const blob = await new Promise((blobResolve) => 
+                        canvas.toBlob(blobResolve, 'image/png', 1.0)
+                        );
 
-                        const fileName = `${file.name.replace(/\.[^/.]+$/, "")}_end.png`;
-                        
-                        cleanUp();
-                        resolve({ blob, fileName });
+                        if (!blob) throw new Error("Failed to create image blob");
+
+                        const imageUrl = URL.createObjectURL(blob);
+                        // Suffix for filename if multiple frames
+                        const suffix = count > 1 ? `_${count - currentFrameIndex}` : '';
+
+                        results.push({
+                            imageUrl,
+                            blob,
+                            fileName: `${file.name.replace(/\.[^/.]+$/, "")}_end${suffix}.png`,
+                            timestamp: timestamp
+                        });
+
+                        currentFrameIndex++;
+                        processNextFrame();
+
                     } catch (e) {
                         cleanUp();
                         reject(e);
                     }
                 };
 
-                video.onerror = () => {
-                    cleanUp();
-                    reject(new Error("Video load failed"));
+                const processNextFrame = () => {
+                    if (currentFrameIndex >= count) {
+                        cleanUp();
+                        resolve(results);
+                        return;
+                    }
+
+                    // Calculate timestamp
+                    // 0 -> duration
+                    // 1 -> duration - 0.1
+                    // 2 -> duration - 0.2
+                    let seekTime = video.duration - (currentFrameIndex * 0.1); 
+                    
+                    if (seekTime > 0.1) {
+                        seekTime = seekTime - 0.05; 
+                    } else {
+                        seekTime = 0; 
+                    }
+                    
+                    video.currentTime = seekTime;
                 };
 
                 const cleanUp = () => {
                     URL.revokeObjectURL(objectUrl);
                     video.remove();
+                    video.onseeked = null;
+                    video.onloadedmetadata = null;
+                    video.onerror = null;
+                };
+
+                video.onloadedmetadata = () => {
+                    if (video.duration === Infinity) {
+                        video.currentTime = 1e101; 
+                        video.ontimeupdate = () => {
+                            video.ontimeupdate = null;
+                            video.currentTime = 0;
+                            processNextFrame();
+                        }
+                    } else {
+                        processNextFrame();
+                    }
+                };
+
+                video.onseeked = () => {
+                    captureFrame(video.currentTime);
+                };
+
+                video.onerror = () => {
+                    cleanUp();
+                    reject(new Error(`Error loading video file (${file.name}). The format might not be supported by your browser.`));
                 };
             });
         };
 
-        // --- Components ---
+        // --- COMPONENTS ---
 
-        const App = () => {
-            const [ghConfig, setGhConfig] = useState<GitHubConfig>(() => {
-                const saved = localStorage.getItem('ghConfig');
-                return saved ? JSON.parse(saved) : { token: '', owner: '', repo: '', path: '' };
-            });
-            const [showSettings, setShowSettings] = useState(false);
-            const [items, setItems] = useState<ProcessedItem[]>([]);
-            const [autoDownload, setAutoDownload] = useState(true);
-
-            useEffect(() => {
-                localStorage.setItem('ghConfig', JSON.stringify(ghConfig));
-            }, [ghConfig]);
-
-            const handleFiles = async (files: FileList | null) => {
-                if (!files) return;
-                
-                const newItems: ProcessedItem[] = Array.from(files).filter(isValidVideoFile).map(f => ({
-                    id: Math.random().toString(36).substr(2, 9),
-                    fileName: f.name,
-                    status: 'PROCESSING',
-                    downloadStatus: 'PENDING',
-                    uploadStatus: 'PENDING'
-                }));
-
-                if (newItems.length === 0) return;
-
-                setItems(prev => [...newItems, ...prev]);
-
-                // Process each file
-                for (let i = 0; i < newItems.length; i++) {
-                    const item = newItems[i];
-                    const file = Array.from(files).find(f => f.name === item.fileName)!;
-
-                    try {
-                        // 1. Extract
-                        const { blob, fileName } = await extractLastFrame(file);
-
-                        // 2. Auto Download
-                        let dlStatus: ProcessedItem['downloadStatus'] = 'SKIPPED';
-                        if (autoDownload) {
-                            try {
-                                downloadBlob(blob, fileName);
-                                dlStatus = 'DONE';
-                            } catch (e) {
-                                dlStatus = 'FAILED';
-                            }
-                        }
-
-                        // Update State after download
-                        setItems(prev => prev.map(it => it.id === item.id ? { ...it, downloadStatus: dlStatus, uploadStatus: 'UPLOADING' } : it));
-
-                        // 3. Upload to GitHub
-                        let upStatus: ProcessedItem['uploadStatus'] = 'SKIPPED';
-                        if (ghConfig.token && ghConfig.repo) {
-                            try {
-                                await uploadToGitHub(blob, fileName, ghConfig);
-                                upStatus = 'DONE';
-                            } catch (e: any) {
-                                console.error(e);
-                                upStatus = 'FAILED';
-                            }
-                        }
-
-                        // 4. Complete
-                        setItems(prev => prev.map(it => it.id === item.id ? { 
-                            ...it, 
-                            status: 'COMPLETED', 
-                            downloadStatus: dlStatus,
-                            uploadStatus: upStatus 
-                        } : it));
-
-                    } catch (e: any) {
-                        setItems(prev => prev.map(it => it.id === item.id ? { 
-                            ...it, 
-                            status: 'ERROR', 
-                            error: e.message 
-                        } : it));
-                    }
-                }
+        const Button = ({ 
+            children, 
+            variant = 'primary', 
+            isLoading, 
+            className = '', 
+            disabled,
+            ...props 
+        }) => {
+            const baseStyle = "inline-flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-slate-900 disabled:opacity-50 disabled:cursor-not-allowed";
+            
+            const variants = {
+                primary: "bg-indigo-600 hover:bg-indigo-500 text-white focus:ring-indigo-500 shadow-lg shadow-indigo-500/20",
+                secondary: "bg-slate-700 hover:bg-slate-600 text-white focus:ring-slate-500",
+                outline: "border border-slate-600 text-slate-300 hover:bg-slate-800 focus:ring-slate-500"
             };
 
             return (
-                <div className="min-h-screen flex flex-col items-center py-12 px-4 relative">
-                    
-                    {/* Header */}
-                    <div className="text-center mb-12 space-y-2 z-10">
-                        <h1 className="text-4xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-br from-indigo-400 to-cyan-300">
-                            EndFrame Capture
-                        </h1>
-                        <p className="text-slate-500 text-sm font-medium">Auto-Extract • Auto-Upload • Stealth View</p>
-                    </div>
+                <button 
+                className={`${baseStyle} ${variants[variant]} ${className}`}
+                disabled={disabled || isLoading}
+                {...props}
+                >
+                {isLoading ? (
+                    <span className="flex items-center space-x-2">
+                        <Loader2 className="animate-spin h-4 w-4" />
+                        <span>Processing...</span>
+                    </span>
+                ) : children}
+                </button>
+            );
+        };
 
-                    {/* Settings Toggle */}
-                    <button 
-                        onClick={() => setShowSettings(!showSettings)}
-                        className="absolute top-4 right-4 p-2 text-slate-400 hover:text-white transition-colors z-20"
-                    >
-                        <Settings className="w-6 h-6" />
-                    </button>
+        const FrameDisplay = ({ 
+            result, 
+            onDownload, 
+            onReset,
+            lang
+        }) => {
+            const t = translations[lang];
 
-                    {/* Settings Modal/Panel */}
-                    {showSettings && (
-                        <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-6 mb-8 shadow-2xl animate-in fade-in zoom-in">
-                            <h2 className="text-lg font-bold text-white mb-4 flex items-center">
-                                <Github className="w-5 h-5 mr-2" /> GitHub Configuration
-                            </h2>
-                            <div className="space-y-4">
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">Personal Access Token</label>
-                                    <input 
-                                        type="password" 
-                                        value={ghConfig.token}
-                                        onChange={e => setGhConfig({...ghConfig, token: e.target.value})}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
-                                        placeholder="ghp_..."
-                                    />
-                                </div>
-                                <div className="grid grid-cols-2 gap-4">
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">Owner</label>
-                                        <input 
-                                            type="text" 
-                                            value={ghConfig.owner}
-                                            onChange={e => setGhConfig({...ghConfig, owner: e.target.value})}
-                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
-                                            placeholder="username"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-xs text-slate-400 mb-1">Repo</label>
-                                        <input 
-                                            type="text" 
-                                            value={ghConfig.repo}
-                                            onChange={e => setGhConfig({...ghConfig, repo: e.target.value})}
-                                            className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
-                                            placeholder="repository"
-                                        />
-                                    </div>
-                                </div>
-                                <div>
-                                    <label className="block text-xs text-slate-400 mb-1">Folder Path (Optional)</label>
-                                    <input 
-                                        type="text" 
-                                        value={ghConfig.path}
-                                        onChange={e => setGhConfig({...ghConfig, path: e.target.value})}
-                                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm text-white focus:ring-1 focus:ring-indigo-500 outline-none"
-                                        placeholder="screenshots/video1"
-                                    />
-                                </div>
-                            </div>
-                            <div className="mt-4 pt-4 border-t border-slate-800">
-                                <label className="flex items-center space-x-2 cursor-pointer">
-                                    <input 
-                                        type="checkbox" 
-                                        checked={autoDownload}
-                                        onChange={e => setAutoDownload(e.target.checked)}
-                                        className="rounded bg-slate-950 border-slate-800 text-indigo-500 focus:ring-0" 
-                                    />
-                                    <span className="text-sm text-slate-300">Auto-save to disk</span>
-                                </label>
-                            </div>
+            return (
+                <div className="w-full max-w-2xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    {/* Header Actions */}
+                    <div className="flex flex-wrap items-center justify-between gap-4 p-4 bg-slate-800/50 rounded-xl border border-slate-700/50 backdrop-blur-sm sticky top-4 z-10 shadow-xl">
+                        <div className="flex items-center space-x-2 text-slate-300">
+                        <FileImage className="w-5 h-5 text-indigo-400" />
+                        <span className="font-medium truncate max-w-[150px] sm:max-w-xs">{result.fileName}</span>
                         </div>
-                    )}
-
-                    {/* Upload Area */}
-                    <label className="w-full max-w-xl aspect-[3/1] bg-slate-900/50 hover:bg-slate-900 border-2 border-dashed border-slate-800 hover:border-indigo-500/50 rounded-2xl flex flex-col items-center justify-center cursor-pointer transition-all group mb-8">
-                        <Upload className="w-8 h-8 text-slate-600 group-hover:text-indigo-400 transition-colors mb-2" />
-                        <span className="text-slate-500 group-hover:text-slate-300 font-medium">Drop videos here</span>
-                        <span className="text-xs text-slate-600 mt-1">MP4, MOV, HEVC, AVI, H264...</span>
-                        <input type="file" multiple accept="video/*" className="hidden" onChange={e => handleFiles(e.target.files)} />
-                    </label>
-
-                    {/* Status List (Stealth Mode: No Images) */}
-                    <div className="w-full max-w-xl space-y-3">
-                        {items.map(item => (
-                            <div key={item.id} className="bg-slate-900 border border-slate-800 p-4 rounded-xl flex items-center justify-between animate-in fade-in slide-in-from-bottom-4">
-                                <div className="flex items-center min-w-0 flex-1 mr-4">
-                                    <div className="w-10 h-10 rounded-full bg-slate-950 flex items-center justify-center border border-slate-800 mr-3 flex-shrink-0">
-                                        {item.status === 'PROCESSING' && <Loader2 className="w-5 h-5 text-indigo-500 animate-spin" />}
-                                        {item.status === 'COMPLETED' && <CheckCircle2 className="w-5 h-5 text-emerald-500" />}
-                                        {item.status === 'ERROR' && <AlertCircle className="w-5 h-5 text-red-500" />}
-                                    </div>
-                                    <div className="min-w-0">
-                                        <h3 className="text-sm font-medium text-slate-200 truncate">{item.fileName}</h3>
-                                        <div className="flex items-center space-x-3 mt-1">
-                                            {item.error ? (
-                                                <span className="text-xs text-red-400">{item.error}</span>
-                                            ) : (
-                                                <>
-                                                    <span className={`text-[10px] uppercase tracking-wider font-bold flex items-center ${item.downloadStatus === 'DONE' ? 'text-emerald-500/80' : 'text-slate-600'}`}>
-                                                        <Download className="w-3 h-3 mr-1" />
-                                                        {item.downloadStatus}
-                                                    </span>
-                                                    <span className={`text-[10px] uppercase tracking-wider font-bold flex items-center ${item.uploadStatus === 'DONE' ? 'text-indigo-400/80' : item.uploadStatus === 'UPLOADING' ? 'text-indigo-400 animate-pulse' : 'text-slate-600'}`}>
-                                                        <CloudUpload className="w-3 h-3 mr-1" />
-                                                        {item.uploadStatus}
-                                                    </span>
-                                                    {item.status === 'COMPLETED' && (
-                                                        <span className="text-[10px] uppercase tracking-wider font-bold text-slate-600 flex items-center ml-2" title="Preview Hidden">
-                                                            <EyeOff className="w-3 h-3 mr-1" /> Hidden
-                                                        </span>
-                                                    )}
-                                                </>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        ))}
+                        <div className="flex items-center gap-2">
+                        <Button onClick={onReset} variant="outline" className="text-sm">
+                            <RefreshCw className="w-4 h-4 mr-2" />
+                            {t.new}
+                        </Button>
+                        <Button onClick={onDownload} variant="primary" className="text-sm">
+                            <Download className="w-4 h-4 mr-2" />
+                            {t.download}
+                        </Button>
+                        </div>
                     </div>
 
+                    <div className="space-y-2">
+                        {/* Image Preview */}
+                        <div className="relative group rounded-xl overflow-hidden bg-slate-950 border border-slate-800 shadow-2xl aspect-video flex items-center justify-center">
+                        <img 
+                            src={result.imageUrl} 
+                            alt="Extracted frame" 
+                            className="w-full h-full object-contain"
+                        />
+                        </div>
+                        <p className="text-xs text-center text-slate-500">
+                        {t.extractTime}: {result.timestamp.toFixed(2)}s
+                        </p>
+                    </div>
                 </div>
             );
         };
 
-        const root = ReactDOM.createRoot(document.getElementById('root') as HTMLElement);
+        const BatchProgress = ({ 
+            items, 
+            onReset, 
+            onDownloadItem,
+            isProcessing, 
+            autoDownload,
+            lang 
+        }) => {
+            const t = translations[lang];
+            const completedCount = items.filter(i => i.status === 'COMPLETED').length;
+            const progress = items.length > 0 ? Math.round((completedCount / items.length) * 100) : 0;
+
+            return (
+                <div className="w-full max-w-3xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    
+                    {/* Header Stats */}
+                    <div className="bg-slate-800/50 rounded-xl border border-slate-700/50 p-6 backdrop-blur-sm shadow-xl">
+                        <div className="flex justify-between items-end mb-4">
+                        <div>
+                            <h2 className="text-xl font-bold text-slate-100">{t.batchTitle}</h2>
+                            <p className="text-sm text-slate-400 mt-1">
+                            {isProcessing ? t.batchProcessing : t.batchCompleted}
+                            </p>
+                        </div>
+                        <div className="text-right">
+                            <div className="text-3xl font-bold text-indigo-400">{completedCount}/{items.length}</div>
+                            <div className="text-xs text-slate-500 uppercase tracking-wider">{t.processed}</div>
+                        </div>
+                        </div>
+                        
+                        {/* Progress Bar */}
+                        <div className="w-full bg-slate-700/50 rounded-full h-2.5 overflow-hidden">
+                        <div 
+                            className="bg-indigo-500 h-2.5 rounded-full transition-all duration-300" 
+                            style={{ width: `${progress}%` }}
+                        ></div>
+                        </div>
+                    </div>
+
+                    {/* File List */}
+                    <div className="bg-slate-900/50 rounded-xl border border-slate-800 overflow-hidden max-h-[600px] overflow-y-auto">
+                        <div className="divide-y divide-slate-800">
+                        {items.map((item) => (
+                            <div key={item.id} className="p-4 flex items-center justify-between hover:bg-slate-800/30 transition-colors gap-4">
+                            
+                            <div className="flex items-center space-x-4 flex-1 overflow-hidden">
+                                {/* Status Icon */}
+                                <div className="flex-shrink-0">
+                                {item.status === 'PENDING' && <Circle className="w-6 h-6 text-slate-600" />}
+                                {item.status === 'PROCESSING' && <Loader2 className="w-6 h-6 text-indigo-400 animate-spin" />}
+                                {item.status === 'COMPLETED' && <CheckCircle2 className="w-6 h-6 text-green-400" />}
+                                {item.status === 'ERROR' && <AlertCircle className="w-6 h-6 text-red-400" />}
+                                </div>
+
+                                {/* Thumbnail Preview */}
+                                <div className="flex-shrink-0 w-24 h-16 bg-slate-950 rounded-md overflow-hidden border border-slate-700 flex items-center justify-center relative group">
+                                {item.result ? (
+                                    <>
+                                    <img src={item.result.imageUrl} alt="Frame" className="w-full h-full object-cover" />
+                                    {/* Hover overlay for quick download */}
+                                    <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center cursor-pointer" onClick={() => onDownloadItem(item.result)}>
+                                        <Download className="w-5 h-5 text-white" />
+                                    </div>
+                                    </>
+                                ) : (
+                                    <div className="text-xs text-slate-600 text-center px-1">
+                                    {item.status === 'PROCESSING' ? t.processing : t.pending}
+                                    </div>
+                                )}
+                                </div>
+
+                                {/* File Info */}
+                                <div className="flex flex-col min-w-0 flex-1">
+                                <span className={`text-sm font-medium truncate ${item.status === 'COMPLETED' ? 'text-slate-300' : 'text-slate-400'}`}>
+                                    {item.file.name}
+                                </span>
+                                {item.status === 'ERROR' && (
+                                    <span className="text-xs text-red-400 truncate">{item.error}</span>
+                                )}
+                                {item.status === 'COMPLETED' && (
+                                    <div className="flex items-center mt-1">
+                                    {autoDownload ? (
+                                        <span className="text-xs text-green-500/70 flex items-center">
+                                            {t.downloaded}
+                                        </span>
+                                    ) : (
+                                        <button 
+                                        onClick={() => item.result && onDownloadItem(item.result)}
+                                        className="text-xs flex items-center text-indigo-400 hover:text-indigo-300 transition-colors"
+                                        >
+                                        <Download className="w-3 h-3 mr-1" />
+                                        {t.downloadNow}
+                                        </button>
+                                    )}
+                                    </div>
+                                )}
+                                </div>
+                            </div>
+                            </div>
+                        ))}
+                        </div>
+                    </div>
+
+                    {/* Actions */}
+                    <div className="flex justify-center pt-4">
+                        {!isProcessing && (
+                        <Button onClick={onReset} variant="outline">
+                            <ArrowLeft className="w-4 h-4 mr-2" />
+                            {t.processMore}
+                        </Button>
+                        )}
+                    </div>
+                </div>
+            );
+        };
+
+        const languages = [
+            { code: 'en', label: 'English' },
+            { code: 'ar', label: 'العربية' },
+            { code: 'es', label: 'Español' },
+            { code: 'fr', label: 'Français' },
+            { code: 'de', label: 'Deutsch' },
+            { code: 'hi', label: 'हिन्दी' },
+            { code: 'it', label: 'Italiano' },
+            { code: 'pl', label: 'Polski' },
+            { code: 'pt', label: 'Português' },
+            { code: 'zh-CN', label: '简体中文' },
+            { code: 'zh-TW', label: '繁體中文' },
+            { code: 'ja', label: '日本語' },
+            { code: 'ko', label: '한국어' },
+        ];
+
+        // --- APP ---
+
+        const App = () => {
+            // Settings
+            const [lang, setLang] = useState('en');
+            const [frameCount, setFrameCount] = useState(1);
+            const [autoDownload, setAutoDownload] = useState(true);
+            const [isLangMenuOpen, setIsLangMenuOpen] = useState(false);
+
+            // Initialize Language based on browser
+            useEffect(() => {
+                const browserLang = navigator.language.toLowerCase();
+                if (browserLang.startsWith('zh-cn') || browserLang === 'zh') {
+                setLang('zh-CN');
+                } else if (browserLang.startsWith('zh')) {
+                setLang('zh-TW');
+                } else if (browserLang.startsWith('ja')) {
+                setLang('ja');
+                } else if (browserLang.startsWith('ko')) {
+                setLang('ko');
+                } else if (browserLang.startsWith('es')) {
+                setLang('es');
+                } else if (browserLang.startsWith('fr')) {
+                setLang('fr');
+                } else if (browserLang.startsWith('de')) {
+                setLang('de');
+                } else if (browserLang.startsWith('it')) {
+                setLang('it');
+                } else if (browserLang.startsWith('pt')) {
+                setLang('pt');
+                } else if (browserLang.startsWith('pl')) {
+                setLang('pl');
+                } else if (browserLang.startsWith('hi')) {
+                setLang('hi');
+                } else if (browserLang.startsWith('ar')) {
+                setLang('ar');
+                } else {
+                setLang('en');
+                }
+            }, []);
+
+            // Close language menu when clicking outside
+            useEffect(() => {
+                const handleClickOutside = (event) => {
+                const target = event.target;
+                if (!target.closest('.lang-dropdown')) {
+                    setIsLangMenuOpen(false);
+                }
+                };
+                document.addEventListener('click', handleClickOutside);
+                return () => document.removeEventListener('click', handleClickOutside);
+            }, []);
+
+            // Single Mode State
+            const [singleStatus, setSingleStatus] = useState(ProcessingStatus.IDLE);
+            const [singleError, setSingleError] = useState(null);
+            const [singleResult, setSingleResult] = useState(null);
+
+            // Batch Mode State
+            const [isBatchMode, setIsBatchMode] = useState(false);
+            const [batchItems, setBatchItems] = useState([]);
+            const [isBatchProcessing, setIsBatchProcessing] = useState(false);
+            
+            const fileInputRef = useRef(null);
+            const t = translations[lang];
+
+            const changeLanguage = (l) => {
+                setLang(l);
+                setIsLangMenuOpen(false);
+            };
+
+            const resetState = () => {
+                setSingleStatus(ProcessingStatus.IDLE);
+                setSingleError(null);
+                if (singleResult) {
+                    URL.revokeObjectURL(singleResult.imageUrl);
+                }
+                setSingleResult(null);
+
+                setIsBatchMode(false);
+                setBatchItems([]);
+                setIsBatchProcessing(false);
+
+                if (fileInputRef.current) {
+                fileInputRef.current.value = '';
+                }
+            };
+
+            const processSingleVideo = async (file) => {
+                try {
+                setSingleStatus(ProcessingStatus.LOADING_VIDEO);
+                const results = await extractFrames(file, frameCount);
+                
+                setSingleResult(results[0]);
+                setSingleStatus(ProcessingStatus.COMPLETED);
+                
+                if (autoDownload) {
+                    results.forEach(res => {
+                    downloadBlob(res.blob, res.fileName);
+                    });
+                }
+
+                } catch (err) {
+                console.error(err);
+                setSingleStatus(ProcessingStatus.ERROR);
+                setSingleError(err.message || t.failed);
+                }
+            };
+
+            const processBatchVideos = async (files) => {
+                setIsBatchMode(true);
+                setIsBatchProcessing(true);
+                
+                const items = files.map((file, index) => ({
+                id: `batch-${index}-${Date.now()}`,
+                file,
+                status: 'PENDING'
+                }));
+                setBatchItems(items);
+
+                for (let i = 0; i < items.length; i++) {
+                const currentItem = items[i];
+                
+                setBatchItems(prev => prev.map(item => 
+                    item.id === currentItem.id ? { ...item, status: 'PROCESSING' } : item
+                ));
+
+                try {
+                    const results = await extractFrames(currentItem.file, frameCount);
+                    
+                    if (autoDownload) {
+                    results.forEach(res => {
+                        downloadBlob(res.blob, res.fileName);
+                    });
+                    }
+
+                    setBatchItems(prev => prev.map(item => 
+                    item.id === currentItem.id ? { ...item, status: 'COMPLETED', result: results[0] } : item
+                    ));
+                } catch (err) {
+                    setBatchItems(prev => prev.map(item => 
+                    item.id === currentItem.id ? { ...item, status: 'ERROR', error: err.message } : item
+                    ));
+                }
+                }
+
+                setIsBatchProcessing(false);
+            };
+
+            const handleFiles = (fileList) => {
+                if (!fileList || fileList.length === 0) return;
+
+                const rawFiles = Array.from(fileList);
+                resetState();
+
+                const files = [];
+                for (const f of rawFiles) {
+                    if (isValidVideoFile(f)) {
+                        files.push(f);
+                    }
+                }
+
+                if (files.length === 0) {
+                    setSingleError(t.errorVideo);
+                    setSingleStatus(ProcessingStatus.ERROR);
+                    return;
+                }
+
+                if (files.length === 1) {
+                    processSingleVideo(files[0]);
+                } else {
+                    processBatchVideos(files);
+                }
+            };
+
+            const handleFileChange = (e) => {
+                handleFiles(e.target.files);
+            };
+
+            const handleDragOver = (e) => {
+                e.preventDefault();
+            };
+
+            const handleDrop = (e) => {
+                e.preventDefault();
+                handleFiles(e.dataTransfer.files);
+            };
+
+            const getSliderLabel = (val) => {
+                if (val === 1) return t.frame1x;
+                if (val === 2) return t.frame2x;
+                return t.frame3x;
+            };
+
+            const currentLangObj = languages.find(l => l.code === lang) || languages[0];
+
+            return (
+                <div className="min-h-screen bg-slate-900 text-slate-100 font-sans selection:bg-indigo-500/30">
+                
+                <div className="fixed inset-0 pointer-events-none overflow-hidden">
+                    <div className="absolute -top-1/2 -left-1/2 w-full h-full bg-indigo-500/5 blur-[120px] rounded-full mix-blend-screen"></div>
+                    <div className="absolute top-0 right-0 w-1/2 h-1/2 bg-blue-500/5 blur-[100px] rounded-full mix-blend-screen"></div>
+                </div>
+
+                <nav className="relative z-20 w-full p-4 flex justify-end">
+                    <div className="relative lang-dropdown">
+                    <button 
+                        onClick={(e) => { e.stopPropagation(); setIsLangMenuOpen(!isLangMenuOpen); }}
+                        className="flex items-center space-x-2 px-4 py-2 rounded-lg bg-slate-800/50 border border-slate-700 hover:bg-slate-700 transition-colors text-sm text-slate-300 shadow-md"
+                    >
+                        <span className="font-medium">{currentLangObj.label}</span>
+                        <ChevronDown className={`w-4 h-4 ml-1 transition-transform duration-200 ${isLangMenuOpen ? 'rotate-180' : ''}`} />
+                    </button>
+                    
+                    {isLangMenuOpen && (
+                        <div className="absolute right-0 top-full mt-2 w-48 max-h-[300px] overflow-y-auto bg-slate-800 border border-slate-700 rounded-xl shadow-2xl py-1 animate-in fade-in zoom-in-95 duration-200 z-50">
+                        {languages.map((l) => (
+                            <button 
+                            key={l.code}
+                            onClick={() => changeLanguage(l.code)}
+                            className="w-full text-left px-4 py-3 text-sm hover:bg-slate-700/50 flex items-center justify-between group transition-colors"
+                            >
+                            <span className="text-slate-200 group-hover:text-white font-medium">{l.label}</span>
+                            {lang === l.code && <Check className="w-4 h-4 text-indigo-400" />}
+                            </button>
+                        ))}
+                        </div>
+                    )}
+                    </div>
+                </nav>
+
+                <main className="relative z-10 container mx-auto px-4 pb-12 pt-4 flex flex-col items-center min-h-[calc(100vh-80px)]">
+                    
+                    <div className="text-center mb-10 space-y-4 max-w-2xl">
+                    <h1 className="text-4xl md:text-6xl font-extrabold tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-indigo-400 to-cyan-300">
+                        {t.title}
+                    </h1>
+                    <p className="text-lg text-slate-400">
+                        {t.subtitle}
+                    </p>
+                    
+                    <div className="flex justify-center mt-4">
+                        <button 
+                        onClick={() => setAutoDownload(!autoDownload)}
+                        className={`flex items-center space-x-2 px-4 py-2 rounded-full border transition-all duration-300 ${
+                            autoDownload 
+                            ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-300 hover:bg-indigo-500/20' 
+                            : 'bg-slate-800/50 border-slate-700 text-slate-400 hover:bg-slate-800'
+                        }`}
+                        >
+                        {autoDownload ? (
+                            <ToggleRight className="w-6 h-6 text-indigo-400" />
+                        ) : (
+                            <ToggleLeft className="w-6 h-6 text-slate-500" />
+                        )}
+                        <span className="text-sm font-medium">
+                            {autoDownload ? t.autoDownloadOn : t.autoDownloadOff}
+                        </span>
+                        </button>
+                    </div>
+                    </div>
+
+                    <div className="w-full flex flex-col items-center justify-center flex-1">
+                    
+                    {!isBatchMode && singleStatus === ProcessingStatus.IDLE && (
+                        <div 
+                        className="w-full max-w-xl animate-in fade-in zoom-in duration-500 flex flex-col space-y-6"
+                        onDragOver={handleDragOver}
+                        onDrop={handleDrop}
+                        >
+                        <label 
+                            htmlFor="video-upload" 
+                            className="group relative flex flex-col items-center justify-center w-full h-64 md:h-80 border-2 border-dashed border-slate-700 rounded-3xl bg-slate-800/50 hover:bg-slate-800 hover:border-indigo-500/50 transition-all cursor-pointer backdrop-blur-sm"
+                        >
+                            <div className="flex flex-col items-center justify-center pt-5 pb-6 text-center px-4">
+                            <div className="relative mb-6">
+                                <div className="p-5 bg-slate-900 rounded-full group-hover:scale-110 transition-transform shadow-xl shadow-black/20 group-hover:shadow-indigo-500/20 relative z-10 border border-slate-800">
+                                <Upload className="w-10 h-10 text-indigo-400" />
+                                </div>
+                            </div>
+                            
+                            <p className="mb-2 text-xl font-medium text-slate-200">
+                                {t.clickUpload}
+                            </p>
+                            <p className="text-sm text-slate-500 mb-4">
+                                {t.supportFormat}
+                            </p>
+                            
+                            <div className="flex items-center space-x-2 px-3 py-1 bg-slate-700/50 rounded-full border border-indigo-500/20">
+                                <Layers className="w-3 h-3 text-indigo-300" />
+                                <span className="text-xs text-indigo-300">{t.batchTag}</span>
+                            </div>
+                            </div>
+                            <input 
+                            id="video-upload" 
+                            ref={fileInputRef}
+                            type="file" 
+                            accept="video/*" 
+                            multiple 
+                            className="hidden" 
+                            onChange={handleFileChange}
+                            />
+                        </label>
+
+                        <div className="bg-slate-800/50 border border-slate-700/50 rounded-xl p-6 backdrop-blur-sm shadow-lg">
+                            <div className="flex justify-between items-center mb-4">
+                            <label htmlFor="frame-slider" className="text-sm font-medium text-slate-300 flex items-center">
+                                <Layers className="w-4 h-4 mr-2 text-indigo-400" />
+                                {t.frameCountLabel}
+                            </label>
+                            <span className="text-indigo-400 font-bold bg-indigo-500/10 px-3 py-1 rounded-full text-sm border border-indigo-500/20">
+                                {getSliderLabel(frameCount)}
+                            </span>
+                            </div>
+                            <input 
+                            id="frame-slider"
+                            type="range" 
+                            min="1" 
+                            max="3" 
+                            step="1"
+                            value={frameCount}
+                            onChange={(e) => setFrameCount(Number(e.target.value))}
+                            className="w-full h-2 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500 focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+                            />
+                            <div className="flex justify-between text-xs text-slate-500 mt-2 px-1">
+                            <span>1x</span>
+                            <span>2x</span>
+                            <span>3x</span>
+                            </div>
+                        </div>
+                        </div>
+                    )}
+
+                    {!isBatchMode && (singleStatus === ProcessingStatus.LOADING_VIDEO || singleStatus === ProcessingStatus.EXTRACTING) && (
+                        <div className="flex flex-col items-center justify-center space-y-6 animate-in fade-in">
+                        <div className="relative w-24 h-24">
+                            <div className="absolute inset-0 border-t-4 border-indigo-500 border-solid rounded-full animate-spin"></div>
+                            <div className="absolute inset-0 flex items-center justify-center">
+                            <Video className="w-8 h-8 text-indigo-400 opacity-50" />
+                            </div>
+                        </div>
+                        <div className="text-center space-y-1">
+                            <h3 className="text-xl font-semibold text-slate-200">{t.processing}</h3>
+                            <p className="text-slate-500">{t.seeking}</p>
+                        </div>
+                        </div>
+                    )}
+
+                    {!isBatchMode && singleStatus === ProcessingStatus.ERROR && (
+                        <div className="w-full max-w-md bg-red-950/30 border border-red-900/50 rounded-2xl p-6 text-center animate-in fade-in zoom-in">
+                        <AlertCircle className="w-12 h-12 text-red-400 mx-auto mb-4" />
+                        <h3 className="text-lg font-semibold text-red-200 mb-2">{t.failed}</h3>
+                        <p className="text-red-300/70 mb-6">{singleError}</p>
+                        <Button onClick={resetState} variant="secondary">{t.tryAgain}</Button>
+                        </div>
+                    )}
+
+                    {!isBatchMode && singleStatus === ProcessingStatus.COMPLETED && singleResult && (
+                        <FrameDisplay 
+                        result={singleResult}
+                        onDownload={() => downloadBlob(singleResult.blob, singleResult.fileName)}
+                        onReset={resetState}
+                        lang={lang}
+                        />
+                    )}
+
+                    {isBatchMode && (
+                        <BatchProgress 
+                        items={batchItems}
+                        onReset={resetState}
+                        onDownloadItem={(result) => downloadBlob(result.blob, result.fileName)}
+                        isProcessing={isBatchProcessing}
+                        autoDownload={autoDownload}
+                        lang={lang}
+                        />
+                    )}
+
+                    </div>
+
+                    <footer className="mt-12 text-center text-slate-600 text-sm">
+                    <p>{t.localOnly}</p>
+                    </footer>
+                </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<App />);
     </script>
 </body>
