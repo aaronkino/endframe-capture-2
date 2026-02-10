@@ -487,6 +487,7 @@
                 video.muted = true;
                 video.src = objectUrl;
                 video.preload = 'auto'; 
+                video.setAttribute('webkit-playsinline', 'true'); // 額外補強 iOS
 
                 let currentFrameIndex = 0;
                 
@@ -536,8 +537,7 @@
 
                     // To capture the absolute last frame, we want to be as close to the duration as possible
                     // without hitting the exact duration which might trigger 'ended' state.
-                    // 0.001s (1ms) is safe to stay within the last frame boundary.
-                    const END_EPSILON = 0.001; 
+                    const END_EPSILON = 0.04; // 稍微放寬，提高手機端兼容性 (約 1-2 幀)
                     const FRAME_STRIDE = 0.1; // 100ms interval for multiple frames
 
                     // Calculate target time
@@ -557,7 +557,7 @@
                     video.onerror = null;
                 };
 
-                video.onloadedmetadata = () => {
+                video.onloadedmetadata = async () => {
                     if (video.duration === Infinity) {
                         video.currentTime = 1e101; 
                         video.ontimeupdate = () => {
@@ -566,6 +566,13 @@
                             processNextFrame();
                         }
                     } else {
+                        // 手機端關鍵：先嘗試 Play 喚醒流，再 Pause
+                        try {
+                            await video.play();
+                            video.pause();
+                        } catch (e) {
+                            console.log("Auto-play blocked, proceeding anyway");
+                        }
                         processNextFrame();
                     }
                 };
