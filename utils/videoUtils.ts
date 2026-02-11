@@ -7,10 +7,22 @@ export const isValidVideoFile = (file: File): boolean => {
   return file.type.startsWith('video/') || validExtensions.test(file.name);
 };
 
+// Check if device is iOS/iPadOS
+const isIOS = () => {
+  return [
+    'iPad Simulator',
+    'iPhone Simulator',
+    'iPod Simulator',
+    'iPad',
+    'iPhone',
+    'iPod'
+  ].includes(navigator.platform)
+  // iPad on iOS 13 detection
+  || (navigator.userAgent.includes("Mac") && "ontouchend" in document);
+};
+
 /**
  * Extracts N frames from the end of the video.
- * count = 1: Duration - epsilon
- * count = 2: Duration - epsilon, Duration - 0.1s
  */
 export const extractFrames = (file: File, count: number = 1): Promise<ExtractionResult[]> => {
   return new Promise((resolve, reject) => {
@@ -18,11 +30,27 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
     const objectUrl = URL.createObjectURL(file);
     const results: ExtractionResult[] = [];
     
-    // Essential for iOS/Safari to allow loading metadata without playing
+    // Fail & Cleanup helper
+    const fail = (error: Error) => {
+      cleanUp();
+      reject(error);
+    };
+
+    const cleanUp = () => {
+      URL.revokeObjectURL(objectUrl);
+      video.remove();
+      video.onseeked = null;
+      video.onloadedmetadata = null;
+      video.ondurationchange = null;
+      video.onloadeddata = null;
+      video.onerror = null;
+    };
+
+    // Essential for iOS/Safari compatibility
     video.playsInline = true;
     video.muted = true;
+    video.preload = 'metadata'; // Stronger hint for metadata only initially
     video.src = objectUrl;
-    video.preload = 'auto'; 
 
     let currentFrameIndex = 0;
     
@@ -44,7 +72,6 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
             if (!blob) throw new Error("Failed to create image blob");
 
             const imageUrl = URL.createObjectURL(blob);
-            // Suffix for filename if multiple frames
             const suffix = count > 1 ? `_${count - currentFrameIndex}` : '';
 
             results.push({
@@ -58,8 +85,7 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
             processNextFrame();
 
         } catch (e) {
-            cleanUp();
-            reject(e);
+            fail(e instanceof Error ? e : new Error(String(e)));
         }
     };
 
@@ -70,65 +96,102 @@ export const extractFrames = (file: File, count: number = 1): Promise<Extraction
             return;
         }
 
-        // To capture the absolute last frame, we want to be as close to the duration as possible
-        // without hitting the exact duration which might trigger 'ended' state or black screens in some browsers.
-        // Previous 0.05s was too large (could miss last frame at 60fps).
-        // 0.001s (1ms) is safe to stay within the last frame boundary.
         const END_EPSILON = 0.001;
-        const FRAME_STRIDE = 0.1; // 100ms interval for multiple frames
-
-        // Calculate target time
-        // Index 0: duration - 0.001
-        // Index 1: duration - 0.101
+        const FRAME_STRIDE = 0.1; 
         let seekTime = video.duration - END_EPSILON - (currentFrameIndex * FRAME_STRIDE);
-        
-        // Clamp to 0 to prevent negative seek times
         seekTime = Math.max(0, seekTime);
         
+        // Timeout-based seek wait to prevent infinite stall on mobile
+        let seeked = false;
+        const onSeeked = () => {
+          if (seeked) return;
+          seeked = true;
+          video.onseeked = null;
+          captureFrame(video.currentTime);
+        };
+
+        video.onseeked = onSeeked;
         video.currentTime = seekTime;
+
+        // Fallback for mobile if seeked event never fires
+        setTimeout(() => {
+          if (!seeked) {
+            console.warn("Seeked event timed out, attempting capture anyway...");
+            onSeeked();
+          }
+        }, 2000); 
     };
 
-    const cleanUp = () => {
-        URL.revokeObjectURL(objectUrl);
-        video.remove();
-        video.onseeked = null;
-        video.onloadedmetadata = null;
-        video.onerror = null;
+    // Handle initialization with fallback for mobile duration update stalls
+    let initialized = false;
+    const onReady = () => {
+      if (initialized || video.duration === 0 || isNaN(video.duration)) return;
+      initialized = true;
+      processNextFrame();
     };
 
-    video.onloadedmetadata = () => {
-        // Some formats might read infinite duration initially, wait or clamp
-        if (video.duration === Infinity) {
-             video.currentTime = 1e101; // Hack to trigger duration change in some browsers
-             video.ontimeupdate = () => {
-                 video.ontimeupdate = null;
-                 video.currentTime = 0;
-                 processNextFrame();
-             }
-        } else {
-             processNextFrame();
-        }
-    };
-
-    video.onseeked = () => {
-        // Capture after seek is complete
-        captureFrame(video.currentTime);
-    };
-
+    video.onloadedmetadata = onReady;
+    video.ondurationchange = onReady;
+    video.onloadeddata = onReady;
+    
     video.onerror = () => {
-      cleanUp();
-      reject(new Error(`Error loading video file (${file.name}). The format might not be supported by your browser.`));
+      fail(new Error(`Error loading video file (${file.name}). Format might not be supported.`));
     };
+
+    // Force load for mobile
+    video.load();
   });
 };
 
+/**
+ * Robust blob download/sharing for mobile and desktop
+ */
 export const downloadBlob = (blob: Blob, filename: string) => {
+  // 1. Try Web Share API first for mobile (Sync path to avoid popup blockers)
+  if (navigator.share && navigator.canShare) {
+    try {
+      const file = new File([blob], filename, { type: blob.type });
+      if (navigator.canShare({ files: [file] })) {
+        navigator.share({
+          files: [file],
+          title: filename,
+        }).catch(err => {
+          console.error("Share failed, falling back to download", err);
+          executeFallbackDownload(blob, filename);
+        });
+        return;
+      }
+    } catch (e) {
+      console.warn("File constructor or share failed", e);
+    }
+  }
+
+  executeFallbackDownload(blob, filename);
+};
+
+const executeFallbackDownload = (blob: Blob, filename: string) => {
   const url = URL.createObjectURL(blob);
+  
+  // 2. iOS Safari Fallback (Download attribute often ignored)
+  if (isIOS()) {
+    const newTab = window.open(url, '_blank');
+    if (!newTab) {
+      // If blocked, try direct location change
+      window.location.href = url;
+    }
+    return;
+  }
+
+  // 3. Standard Desktop Download
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
+  a.rel = 'noopener';
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  
+  setTimeout(() => {
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, 100);
 };
